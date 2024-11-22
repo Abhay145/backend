@@ -28,7 +28,7 @@ const studentSchema = new mongoose.Schema({
   password: { 
     type: String, 
     required: true,
-    minlength: [8, 'Password must be at least 8 characters long']
+    minlength: [4, 'Password must be at least 4 characters long']
   },
   role: {
     type: String,
@@ -44,7 +44,6 @@ const studentSchema = new mongoose.Schema({
   sem: { 
     type: Number, 
     required: true, 
-    unique: true,
     trim: true,
   },
   branch: { 
@@ -65,15 +64,14 @@ const studentSchema = new mongoose.Schema({
     min: [0, 'CGPA cannot be negative'],
     max: [10, 'CGPA cannot exceed 10']
   },
-  subjects: [{ 
+  subjects: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Subject' 
-  }],
+    ref: 'Subject'  // Single subject reference (not an array)
+  },
   choices: [{ 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Subject' 
   }],
-
 });
 
 // Pre-save hook to hash password
@@ -87,7 +85,5 @@ studentSchema.pre('save', async function(next) {
 studentSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcryptjs.compare(candidatePassword, this.password);
 };
-studentSchema.path('subjects').validate(function (subjects) {
-  return subjects.length <= 1;
-}, 'A student can only have a maximum of one subject.');
+
 module.exports = mongoose.model('Student', studentSchema);

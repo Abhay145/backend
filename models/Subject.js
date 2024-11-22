@@ -8,6 +8,7 @@ const subjectSchema = new mongoose.Schema({
   professor: { type: mongoose.Schema.Types.ObjectId, required: false, ref: 'Professor' },
   sem: { type: Number, required: true },
   seats: { type: Number, required: false },
+  default_seats: { type: Number, required: false },
   students: [
     {
       type: mongoose.Schema.Types.ObjectId,

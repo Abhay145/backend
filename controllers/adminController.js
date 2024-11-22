@@ -5,6 +5,7 @@ const Student = require('../models/Student.js');
 const Professor = require('../models/Professor.js');
 const Subject = require('../models/Subject');
 const mongoose = require('mongoose');
+const fs = require('fs')
 
 // Make sure you have bcryptjs installed
 
@@ -55,7 +56,7 @@ exports.loginAdmin = async (req, res) => {
     }
 
     // Generate a token
-    const token = jwt.sign({ id: admin._id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ id: admin._id, role: 'admin' }, process.env.JWT_SECRET);
 
     res.status(200).json({ token });
   } catch (error) {
@@ -95,65 +96,100 @@ exports.getstudents = async (req, res) => {
   }
 };
 
+
 exports.assignElectives = async (req, res) => {
   try {
     // Fetch students, sorted by CG in descending order, and populate their choices
-    const students = await Student.find().sort({ CG: -1 }).populate('choices');
+    const students = await Student.find().populate('choices'); // Fetch students and populate choices
+
+    // Sort students: prioritize those with choices and then by CG
+    students.sort((a, b) => {
+      const aHasChoices = a.choices && a.choices.length > 0 ? 1 : 0;
+      const bHasChoices = b.choices && b.choices.length > 0 ? 1 : 0;
+    
+      // Prioritize students with choices
+      if (bHasChoices - aHasChoices !== 0) {
+        return bHasChoices - aHasChoices;
+      }
+    
+      // If both have or don't have choices, sort by CG in descending order
+      return b.CG - a.CG;
+    });
+    
+
+
+    // Get all subjects in one query
+    const allSubjects = await Subject.find();
+    const subjectMap = new Map();
+    allSubjects.forEach(subject => {
+      subjectMap.set(subject._id.toString(), subject); // Map subjects by their _id for quick lookup
+    });
+
+    const studentUpdates = []; // Store updates for students
+    const subjectUpdates = []; // Store updates for subjects
 
     for (const student of students) {
       let subjectAssigned = false;
 
-      // Iterate through the student's choices to find an available subject
-      for (const elective of student.choices) {
-        const subject = await Subject.findById(elective._id);
+      // First, try to assign subjects from the student's choices
+      if (student.choices && student.choices.length > 0) {
+        for (const elective of student.choices) {
+          const subject = subjectMap.get(elective._id.toString());
 
-        if (!subject) {
-          console.error(`Subject with ID ${elective._id} not found.`);
-          continue;
-        }
+          if (!subject) {
+            console.error(`Subject with ID ${elective._id} not found.`);
+            continue;
+          }
 
-        if (subject.seats > 0) {
-          // Add the subject to the student's assigned subjects
-          student.subjects.push(subject._id);
+          if (subject.seats > 0) {
+            // Assign the subject to the student's subjects field (single subject now)
+            student.subjects = subject._id;
 
-          // Add the student to the subject's students array
-          subject.students.push(student._id);
-          subject.seats -= 1;
+            // Add the student to the subject's students array
+            subject.students.push(student._id);
+            subject.seats -= 1;
 
-          // Save the updated student and subject
-          await student.save({ validateModifiedOnly: true });
-          await subject.save();
-          subjectAssigned = true;
-          break;
+            // Prepare updates for student and subject
+            studentUpdates.push(Student.updateOne({ _id: student._id }, { $set: { subjects: subject._id } }));
+            subjectUpdates.push(Subject.updateOne({ _id: subject._id }, { $set: { seats: subject.seats }, $push: { students: student._id } }));
+
+            subjectAssigned = true;
+            break; // Once a subject is assigned, break out of the loop
+          }
         }
       }
 
-      // Assign eligible subject if no choice is available or suitable
+      // If no subject was assigned from choices, allocate from eligible subjects
       if (!subjectAssigned) {
-        const eligibleSubjects = await Subject.find({
-          eligibility: student.dept,
-          sem: student.sem,
-          seats: { $gt: 0 },
-        });
+        const eligibleSubjects = allSubjects.filter(subject => 
+          subject.eligibility.includes(student.dept) && subject.sem === student.sem && subject.seats > 0
+        );
 
         if (eligibleSubjects.length > 0) {
           const fallbackSubject = eligibleSubjects[0];
 
-          // Add the fallback subject to the student's assigned subjects
-          student.subjects.push(fallbackSubject._id);
+          // Assign the fallback subject to the student's subjects field (single subject now)
+          student.subjects = fallbackSubject._id;
 
           // Add the student to the fallback subject's students array
           fallbackSubject.students.push(student._id);
           fallbackSubject.seats -= 1;
 
-          // Save the updated student and subject
-          await student.save({ validateModifiedOnly: true });
-          await fallbackSubject.save();
+          // Prepare updates for student and fallback subject
+          studentUpdates.push(Student.updateOne({ _id: student._id }, { $set: { subjects: fallbackSubject._id } }));
+          subjectUpdates.push(Subject.updateOne({ _id: fallbackSubject._id }, { $set: { seats: fallbackSubject.seats }, $push: { students: student._id } }));
         } else {
           console.error(`No eligible subjects available for student ${student._id}`);
         }
       }
     }
+
+    // Execute bulk updates for students and subjects in parallel
+    await Promise.all([
+      ...studentUpdates,
+      ...subjectUpdates,
+    ]);
+   
 
     res.status(200).json({ message: 'Electives assigned successfully' });
   } catch (error) {
@@ -162,17 +198,41 @@ exports.assignElectives = async (req, res) => {
   }
 };
 
+
+
+
+
 exports.clearSubjectsForAllStudents = async (req, res) => {
   try {
-    // Clear the `subjects` array for all students
-    await Student.updateMany({}, { $set: { subjects: [] } });
+    // Fetch all subjects, ensuring it returns the documents with the appropriate ObjectId
+    const subjects = await Subject.find().lean();
 
-    // Clear the `students` array for all subjects
-    await Subject.updateMany({}, { $set: { students: [] } });
+    // Prepare bulk write operations for subjects
+    const subjectUpdates = subjects.map((subject) => ({
+      updateOne: {
+        filter: { _id: subject._id },
+        update: {
+          $set: {
+            seats: subject.default_seats, // Reset seats to the default value
+            students: [], // Clear students array
+          },
+        },
+      },
+    }));
 
-    res.status(200).json({ message: 'Subjects cleared for all students and subjects database updated' });
+    // Execute bulk write for subjects, ensuring proper updates
+    if (subjectUpdates.length > 0) {
+      await Subject.bulkWrite(subjectUpdates);
+    }
+
+    // Empty the `subject` field for all students (set it to null)
+    await Student.updateMany({}, { $set: { subjects: null } });
+
+    res.status(200).json({
+      message: 'Subjects cleared for all students, and seats reset successfully.',
+    });
   } catch (error) {
-    console.error('Error clearing subjects for all students:', error);
-    res.status(500).json({ message: 'Something went wrong' });
+    console.error('Error clearing subjects and resetting seats:', error);
+    res.status(500).json({ message: 'Something went wrong', error: error.message });
   }
 };
