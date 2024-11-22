@@ -8,9 +8,9 @@ const studentRoutes = require('./routes/studentRoutes.js');
 const professorRoutes = require('./routes/professorRoutes.js');
 const adminRoutes = require('./routes/adminRoutes.js');
 const subjectsRoute = require('./routes/subjects.js');
-const Subject = require('../backend/models/Subject.js');
-const Student = require('../backend/models/Student.js');
-const { authMiddleware } = require('../backend/middleware/authMiddleware.js');
+const Subject = require('./models/Subject.js');
+const Student = require('./models/Student.js');
+const { authMiddleware } = require('./middleware/authMiddleware.js');
 
 dotenv.config();
 
