@@ -18,10 +18,7 @@ const app = express();
 
 // Configure CORS
 app.use(
-  cors({
-    origin: 'http://localhost:5173', // Replace with your frontend domain
-    credentials: true, // Allow cookies if needed
-  })
+  cors()
 );
 
 // Middleware for parsing JSON and larger payloads
